@@ -2,7 +2,11 @@ package com.example.modid.item;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.util.ITooltipFlag;
+import net.minecraft.enchantment.Enchantment;
+import net.minecraft.enchantment.EnchantmentHelper;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.init.Enchantments;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
@@ -14,18 +18,19 @@ import net.minecraft.util.text.TextComponentString;
 import net.minecraft.world.World;
 
 import javax.annotation.Nullable;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class ItemOmniTool extends Item {
 
     // ================= GT 工具模式 =================
-    // 字符串必须与 GTCEu 的 gregtech.api.items.toolitem.ToolClasses 常量值完全一致：
-    //   ToolClasses.WRENCH = "wrench"、SOFT_MALLET = "mallet"、SCREWDRIVER = "screwdriver"、
-    //   CROWBAR = "crowbar"、HARD_HAMMER = "hammer"、WIRE_CUTTER = "wirecutter"
-    // GT 的 BlockMachine#onBlockActivated 与维护仓的 fixProblemsWithTools 都是拿
-    // Item#getToolClasses(stack) 的返回值去匹配这些字符串的。
+    // 字符串必须与 GTCEu 的 gregtech.api.items.toolitem.ToolClasses 常量值完全一致；
+    // GT 的 BlockMachine 与维护仓都靠 Item#getToolClasses 的返回值识别工具。
     public static final String MODE_WRENCH = "wrench";
     public static final String MODE_MALLET = "mallet";
     public static final String MODE_SCREWDRIVER = "screwdriver";
@@ -36,6 +41,16 @@ public class ItemOmniTool extends Item {
     public static final String[] GT_MODES = new String[]{
             MODE_WRENCH, MODE_MALLET, MODE_SCREWDRIVER, MODE_CROWBAR, MODE_HAMMER, MODE_WIRECUTTER
     };
+
+    // 工具永远同时具备这些 GT 工具类：机器/线缆的掉落与维护仓扫描都按工具类判定，
+    // 只返回当前模式会漏掉其它判定（例如维护仓修不同故障、GT 的 pickaxe 判定）。
+    public static final Set<String> ALL_TOOL_CLASSES = Collections.unmodifiableSet(
+            new LinkedHashSet<>(Arrays.asList(
+                    "wrench", "wirecutter", "pickaxe", "screwdriver", "mallet", "crowbar", "hammer")));
+
+    // 时运/抢夺等级：不走事件，直接写进 NBT，交给原版附魔逻辑
+    public static final int FORTUNE_LEVEL = 127;
+    public static final int LOOTING_LEVEL = 127;
 
     public ItemOmniTool() {
         setRegistryName("omnitool", "omni_tool");
@@ -69,7 +84,6 @@ public class ItemOmniTool extends Item {
         tag.setString("omniMode", mode);
     }
 
-    // 当前模式是否是 GT 认识的工具类型
     public static boolean isGtToolMode(String mode) {
         if (mode == null) return false;
         for (String m : GT_MODES) {
@@ -103,27 +117,55 @@ public class ItemOmniTool extends Item {
         tag.setBoolean("silkTouch", silk);
     }
 
-    // ================= 关键：把 NBT 模式暴露为 Forge 工具类 =================
-    // 这是 GT 交互的入口：GTCEu 的 BlockMachine 在 onBlockActivated 里就是
-    //     Set<String> toolClasses = stack.getItem().getToolClasses(stack);
-    //     if (!toolClasses.isEmpty()) metaTileEntity.onToolClick(player, toolClasses, hand, hit);
-    // 而维护仓的 fixProblemsWithTools 用 ToolHelper.isTool(stack, "wrench") 等，
-    // ToolHelper.isTool(ItemStack, String...) 内部同样只读 Item#getToolClasses。
-    // 所以只要这里返回当前模式字符串，GT 机器就能识别我们的工具，不需要任何反射。
+    // ================= 原版附魔：直接写 NBT =================
+    /**
+     * 把当前模式的附魔写进物品 NBT：
+     *   精准模式 -> 精准采集 I（无时运）
+     *   时运模式 -> 时运 CXXVII（127 级）
+     * 两种模式都带 抢夺 CXXVII，杀人时的掉落由原版 EntityLivingBase.dropLoot 读取，
+     * 不再需要 LivingDropsEvent。
+     */
+    public static void applyEnchantments(ItemStack stack) {
+        Map<Enchantment, Integer> desired = new HashMap<>();
+        if (isSilkTouch(stack)) {
+            desired.put(Enchantments.SILK_TOUCH, 1);
+        } else {
+            desired.put(Enchantments.FORTUNE, FORTUNE_LEVEL);
+        }
+        desired.put(Enchantments.LOOTING, LOOTING_LEVEL);
+
+        // 不一致才写，避免每 tick 都改 NBT
+        if (!desired.equals(EnchantmentHelper.getEnchantments(stack))) {
+            EnchantmentHelper.setEnchantments(desired, stack);
+        }
+    }
+
+    // 防止玩家用铁砧/砂轮把附魔洗掉：服务端每 tick 校验一次，客户端靠同步更新
+    @Override
+    public void onUpdate(ItemStack stack, World worldIn, Entity entityIn, int itemSlot, boolean isSelected) {
+        if (worldIn.isRemote) return;
+        applyEnchantments(stack);
+    }
+
+    // ================= Forge 工具类（GT 交互 / 掉落 / 维护仓识别） =================
+    // 不再按 NBT 模式返回单一类型：始终返回全部 GT 工具类，
+    // 这样 BlockMachine/BlockPipe 的掉落判定、维护仓 fixProblemsWithTools 的扫描、
+    // GT 的 pickaxe 判定都能通过。具体“当前模拟哪种工具”由 GTInteractionHandler
+    // 在右键分派时单独只传当前模式，所以不会影响扳手/软锤等交互差异。
     @Override
     public Set<String> getToolClasses(ItemStack stack) {
-        String mode = getMode(stack);
-        if (isGtToolMode(mode)) {
-            return Collections.singleton(mode);
-        }
-        return Collections.emptySet();
+        return ALL_TOOL_CLASSES;
     }
 
+    // 兜底：Forge 的采集判定会先问 getHarvestLevel，返回 -1 时会退化到
+    // inventory.canHarvestBlock()。这里直接给高等级，保证 GT 机器（wrench 1 级）等
+    // “需要工具才掉落”的方块一定能通过 harvestBlock 检查。
     @Override
-    public int getItemEnchantability() {
-        return 0;
+    public int getHarvestLevel(ItemStack stack, String toolClass, @Nullable EntityPlayer player, @Nullable IBlockState blockState) {
+        return 5;
     }
 
+    // 让物品始终带附魔光效
     @Override
     public boolean hasEffect(ItemStack stack) {
         return true;
@@ -135,8 +177,7 @@ public class ItemOmniTool extends Item {
         ItemStack stack = playerIn.getHeldItem(handIn);
 
         if (playerIn.isSneaking()) {
-            // 由客户端和服务端各自做一次射线检测；任何一边判定指向方块，就都不切换，
-            // 把这次右键完整留给 GT 机器（BlockMachine）或其它方块逻辑。
+            // 客户端和服务端各做一次射线检测；命中方块就不切换，把右键让给 GT 机器
             RayTraceResult ray = this.rayTrace(worldIn, playerIn, true);
             boolean aimingBlock = ray != null && ray.typeOfHit == RayTraceResult.Type.BLOCK;
             if (aimingBlock) {
@@ -145,9 +186,10 @@ public class ItemOmniTool extends Item {
 
             boolean currentSilk = isSilkTouch(stack);
             setSilkTouch(stack, !currentSilk);
+            applyEnchantments(stack); // 立刻写入附魔 NBT
 
             if (!worldIn.isRemote) {
-                String modeText = !currentSilk ? "§b精准采集 (Silk Touch)" : "§d上限时运 (Fortune X)";
+                String modeText = !currentSilk ? "§b精准采集 (Silk Touch)" : "§d上限时运 (Fortune 127)";
                 playerIn.sendMessage(new TextComponentString("§e[全能工具] §f已切换附魔为: " + modeText));
             }
             playerIn.swingArm(handIn);
@@ -156,11 +198,11 @@ public class ItemOmniTool extends Item {
         return super.onItemRightClick(worldIn, playerIn, handIn);
     }
 
-    // ================= 物品提示：显示当前模式 =================
+    // ================= 物品提示 =================
     @Override
     public void addInformation(ItemStack stack, @Nullable World worldIn, List<String> tooltip, ITooltipFlag flagIn) {
         tooltip.add("§7当前 GT 模式: §f" + getModeDisplayName(getMode(stack)));
-        tooltip.add("§7附魔: §f" + (isSilkTouch(stack) ? "精准采集" : "时运 X"));
+        tooltip.add("§7附魔: §f" + (isSilkTouch(stack) ? "精准采集" : "时运 127") + " §7+ §f抢夺 127");
         tooltip.add("§8Shift+右键空气 切换精准/时运");
     }
 }

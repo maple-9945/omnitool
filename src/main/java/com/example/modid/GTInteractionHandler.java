@@ -17,6 +17,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 
+import java.util.Collections;
 import java.util.Set;
 
 /**
@@ -69,7 +70,10 @@ public class GTInteractionHandler {
         if (!(trace instanceof CuboidRayTraceResult)) return;
 
         CuboidRayTraceResult hit = (CuboidRayTraceResult) trace;
-        Set<String> toolClasses = held.getItem().getToolClasses(held);
+        // getToolClasses() 现在恒返回全部工具类（给掉落/维护仓判定用），
+        // 但右键分派必须只传「当前 NBT 模式」，否则 MetaTileEntity.onToolClick
+        // 会按 screwdriver -> mallet -> wrench ... 的顺序永远先命中 screwdriver。
+        Set<String> toolClasses = Collections.singleton(mode);
         if (toolClasses.isEmpty()) return;
 
         EnumHand hand = event.getHand();
