@@ -23,3 +23,6 @@ build
 # other
 eclipse
 run
+
+# local dev jars (not in VCS; see libs/SOURCES.md)
+libs/*.jar
