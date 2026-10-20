@@ -19,5 +19,9 @@ public final class OmniNetwork {
         if (INSTANCE != null) return;
         INSTANCE = NetworkRegistry.INSTANCE.newSimpleChannel(CHANNEL_NAME);
         INSTANCE.registerMessage(MessageSetMode.Handler.class, MessageSetMode.class, 0, Side.SERVER);
+        INSTANCE.registerMessage(MessageTimeAccel.Handler.class, MessageTimeAccel.class, 1, Side.SERVER);
+        INSTANCE.registerMessage(MessageAccelSync.Handler.class, MessageAccelSync.class, 2, Side.CLIENT);
+        INSTANCE.registerMessage(MessageAccelCancel.Handler.class, MessageAccelCancel.class, 3, Side.SERVER);
+        INSTANCE.registerMessage(MessageAccelOptions.Handler.class, MessageAccelOptions.class, 4, Side.SERVER);
     }
 }

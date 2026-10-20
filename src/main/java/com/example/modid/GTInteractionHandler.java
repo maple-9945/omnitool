@@ -66,6 +66,14 @@ public class GTInteractionHandler {
         MetaTileEntity mte = GTUtility.getMetaTileEntity(world, pos);
         if (mte == null) return; // 不是 GT 机器（方块不是 BlockMachine 承载的 MetaTileEntity）
 
+        // 时间加速标记：GT 机器这条交互路径一定会走到（后面会 cancel 原版右键，
+        // 所以不能只依赖独立的 RightClickBlock 监听）
+        if (world.isRemote) {
+            com.example.modid.client.ClientAccelRenderer.markFromClient(world, pos);
+        } else {
+            TimeAccelHandler.markFromInteraction(world, pos, player);
+        }
+
         RayTraceResult trace = RayTracer.retraceBlock(world, player, pos);
         if (!(trace instanceof CuboidRayTraceResult)) return;
 

@@ -1,3 +1,5 @@
 item.omnitool.omni_tool.name=Omni Tool
-key.omnitool.open_gui=Open Omni Tool GUI
+key.omnitool.open_gui=Open Omni Tool GUI (G)
+key.omnitool.time_accel=Time Acceleration / Mark (V)
+key.omnitool.accel_cancel=Cancel Acceleration (R)
 key.categories.omnitool=Omni Tool
