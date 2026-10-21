@@ -36,5 +36,11 @@ public final class WirelessHudRenderer {
         String energy = "存电: " + WirelessClientData.formatEnergy();
         mc.fontRenderer.drawStringWithShadow(energy,
                 right - mc.fontRenderer.getStringWidth(energy), y + 12, 0xFFFFFF);
+
+        boolean blockBound = !ItemWirelessLinker.BIND_POS.equals(
+                ItemWirelessLinker.getBindMode(player.getHeldItemMainhand()));
+        String mode = "绑定方式: " + (blockBound ? "方块" : "坐标");
+        mc.fontRenderer.drawStringWithShadow(mode,
+                right - mc.fontRenderer.getStringWidth(mode), y + 24, blockBound ? 0x55FF55 : 0xFFDD55);
     }
 }

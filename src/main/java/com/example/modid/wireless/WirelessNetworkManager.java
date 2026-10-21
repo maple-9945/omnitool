@@ -20,6 +20,8 @@ import java.util.UUID;
 public class WirelessNetworkManager extends WorldSavedData {
 
     public static final String DATA_NAME = "omnitool_wireless_networks";
+    /** 存档格式版本：以后加字段时递增，老存档按 v1 读取 */
+    public static final int DATA_VERSION = 2;
     /** 旧版本的存档标签名，用于迁移 */
     private static final String LEGACY_TAG = "WirelessGridData";
 
@@ -88,7 +90,12 @@ public class WirelessNetworkManager extends WorldSavedData {
     public void readFromNBT(NBTTagCompound nbt) {
         networks.clear();
 
-        NBTTagList list = nbt.getTagList("Networks", 10);
+        // DataVersion 用于以后扩展字段；老存档没有这个标签时按 v1 处理
+        int version = nbt.hasKey("DataVersion") ? nbt.getInteger("DataVersion") : 1;
+
+        NBTTagList list = nbt.hasKey("Networks", 9)
+                ? nbt.getTagList("Networks", 10)
+                : new NBTTagList();
         for (int i = 0; i < list.tagCount(); i++) {
             WirelessNetwork network = WirelessNetwork.readFromNBT(list.getCompoundTagAt(i));
             networks.put(network.getNetworkId(), network);
@@ -97,6 +104,10 @@ public class WirelessNetworkManager extends WorldSavedData {
         // 旧版本兼容：如果有 WirelessGridData，按玩家创建对应网络并迁移电量/绑定
         if (networks.isEmpty() && nbt.hasKey(LEGACY_TAG)) {
             migrateLegacy(nbt.getCompoundTag(LEGACY_TAG));
+        }
+
+        if (version < DATA_VERSION && !networks.isEmpty()) {
+            markDirty();   // 让旧格式在下一次保存时被写成新格式
         }
     }
 
@@ -111,7 +122,7 @@ public class WirelessNetworkManager extends WorldSavedData {
             NBTTagCompound old = legacy.getCompoundTag(key);
             WirelessNetwork network = new WirelessNetwork(UUID.randomUUID());
             network.getMembers().add(playerId);
-            network.storedEnergy = old.getDouble("energy");
+            network.storedEnergy = WirelessNetwork.sanitizeEnergy(old.getDouble("energy"));
             networks.put(network.getNetworkId(), network);
         }
         markDirty();
@@ -119,6 +130,9 @@ public class WirelessNetworkManager extends WorldSavedData {
 
     @Override
     public NBTTagCompound writeToNBT(NBTTagCompound nbt) {
+        // 只更新本 mod 的键，保留 nbt 里其它（未知的）标签，避免跨版本更新时误删数据
+        nbt.setInteger("DataVersion", DATA_VERSION);
+
         NBTTagList list = new NBTTagList();
         for (WirelessNetwork network : networks.values()) {
             list.appendTag(network.writeToNBT());

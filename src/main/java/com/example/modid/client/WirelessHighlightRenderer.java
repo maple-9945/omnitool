@@ -43,13 +43,22 @@ public final class WirelessHighlightRenderer {
         GlStateManager.depthMask(false);
         GlStateManager.glLineWidth(2.0F);
 
+        // 绑定方块：绿(发电)/蓝(供电)；绑定坐标：黄(发电)/紫(供电)
         for (PosDim entry : WirelessClientData.getGenerators()) {
             if (entry.dimension != dimension) continue;
-            drawBox(entry, px, py, pz, 0.2F, 1.0F, 0.2F);   // 绿色
+            if (entry.blockBound) {
+                drawBox(entry, px, py, pz, 0.2F, 1.0F, 0.2F);
+            } else {
+                drawBox(entry, px, py, pz, 1.0F, 0.85F, 0.2F);
+            }
         }
         for (PosDim entry : WirelessClientData.getConsumers()) {
             if (entry.dimension != dimension) continue;
-            drawBox(entry, px, py, pz, 0.2F, 0.5F, 1.0F);   // 蓝色
+            if (entry.blockBound) {
+                drawBox(entry, px, py, pz, 0.2F, 0.5F, 1.0F);
+            } else {
+                drawBox(entry, px, py, pz, 0.8F, 0.3F, 1.0F);
+            }
         }
 
         GlStateManager.glLineWidth(1.0F);

@@ -17,6 +17,7 @@ public class MessageWirelessAction implements IMessage {
     public static final int ACTION_CLEAR_BINDINGS = 2;
     public static final int ACTION_CYCLE_NETWORK = 3;
     public static final int ACTION_CREATE_NETWORK = 4;
+    public static final int ACTION_TOGGLE_BIND_MODE = 5;
 
     private int action;
 

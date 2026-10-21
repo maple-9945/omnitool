@@ -20,6 +20,7 @@ public class GuiWirelessLinker extends GuiScreen {
     private static final int BTN_CLEAR = 2;
     private static final int BTN_CYCLE = 3;
     private static final int BTN_CREATE = 4;
+    private static final int BTN_BIND_MODE = 5;
     private static final int BTN_DONE = 100;
 
     @Override
@@ -37,7 +38,15 @@ public class GuiWirelessLinker extends GuiScreen {
         this.buttonList.add(new GuiButton(BTN_CREATE, leftX, y + 26, 100, 20, "创建新网络"));
         this.buttonList.add(new GuiButton(BTN_CYCLE, rightX, y + 26, 100, 20, "选择网络"));
         this.buttonList.add(new GuiButton(BTN_CLEAR, centerX - 100, y + 52, 200, 20, "取消全部绑定"));
-        this.buttonList.add(new GuiButton(BTN_DONE, centerX - 50, y + 78, 100, 20, "完成"));
+        this.buttonList.add(new GuiButton(BTN_BIND_MODE, centerX - 100, y + 78, 200, 20, bindModeLabel()));
+        this.buttonList.add(new GuiButton(BTN_DONE, centerX - 50, y + 104, 100, 20, "完成"));
+    }
+
+    private String bindModeLabel() {
+        ItemStack held = this.mc == null || this.mc.player == null
+                ? ItemStack.EMPTY : this.mc.player.getHeldItemMainhand();
+        boolean blockBound = !ItemWirelessLinker.BIND_POS.equals(ItemWirelessLinker.getBindMode(held));
+        return "绑定方式: " + (blockBound ? "方块（拆除即失效）" : "坐标（拆除仍保留）");
     }
 
     @Override
@@ -60,6 +69,16 @@ public class GuiWirelessLinker extends GuiScreen {
             case BTN_CLEAR:
                 send(MessageWirelessAction.ACTION_CLEAR_BINDINGS);
                 break;
+            case BTN_BIND_MODE: {
+                ItemStack held = this.mc.player == null ? ItemStack.EMPTY : this.mc.player.getHeldItemMainhand();
+                if (!held.isEmpty()) {
+                    ItemWirelessLinker.setBindMode(held,
+                            ItemWirelessLinker.toggleBindMode(ItemWirelessLinker.getBindMode(held)));
+                }
+                button.displayString = bindModeLabel();
+                send(MessageWirelessAction.ACTION_TOGGLE_BIND_MODE);
+                break;
+            }
             case BTN_DONE:
                 this.mc.displayGuiScreen(null);
                 break;
@@ -102,5 +121,11 @@ public class GuiWirelessLinker extends GuiScreen {
         String energy = "存电: " + WirelessClientData.formatEnergy();
         this.fontRenderer.drawStringWithShadow(energy,
                 centerX - this.fontRenderer.getStringWidth(energy) / 2, top + 48, 0xFFFFFF);
+
+        boolean blockBound = !ItemWirelessLinker.BIND_POS.equals(ItemWirelessLinker.getBindMode(held));
+        String bindText = "绑定方式: " + (blockBound ? "方块（拆除即失效）" : "坐标（拆除仍保留）");
+        this.fontRenderer.drawStringWithShadow(bindText,
+                centerX - this.fontRenderer.getStringWidth(bindText) / 2, top + 64,
+                blockBound ? 0x55FF55 : 0xFFDD55);
     }
 }

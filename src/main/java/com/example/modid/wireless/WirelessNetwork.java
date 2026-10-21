@@ -1,5 +1,6 @@
 package com.example.modid.wireless;
 
+import com.example.modid.item.ItemWirelessLinker;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.math.BlockPos;
@@ -25,6 +26,8 @@ public class WirelessNetwork {
     private final Set<UUID> members = new HashSet<>();
     /** 绑定方块所在维度，用于结算时定位正确的世界 */
     private final Map<BlockPos, Integer> dimensions = new HashMap<>();
+    /** 每个坐标的绑定方式：block = 绑定方块（拆除即失效）；pos = 绑定坐标（拆除仍保留） */
+    private final Map<BlockPos, String> bindModes = new HashMap<>();
 
     public WirelessNetwork(UUID networkId) {
         this.networkId = networkId;
@@ -87,6 +90,28 @@ public class WirelessNetwork {
         consumers.remove(player);
     }
 
+    /** 方块被拆除/消失时：从所有玩家的发电与供电列表里移除该坐标，返回是否真的移除了东西 */
+    public boolean removePosition(BlockPos pos) {
+        boolean removed = removeFromMap(generators, pos);
+        removed |= removeFromMap(consumers, pos);
+        dimensions.remove(pos);
+        bindModes.remove(pos);
+        return removed;
+    }
+
+    private static boolean removeFromMap(Map<UUID, List<BlockPos>> map, BlockPos pos) {
+        boolean removed = false;
+        java.util.Iterator<Map.Entry<UUID, List<BlockPos>>> iterator = map.entrySet().iterator();
+        while (iterator.hasNext()) {
+            List<BlockPos> list = iterator.next().getValue();
+            if (list.remove(pos)) {
+                removed = true;
+                if (list.isEmpty()) iterator.remove();
+            }
+        }
+        return removed;
+    }
+
     public int dimensionOf(BlockPos pos) {
         Integer dim = dimensions.get(pos);
         return dim == null ? 0 : dim;
@@ -94,6 +119,21 @@ public class WirelessNetwork {
 
     public void setDimensionOf(BlockPos pos, int dimension) {
         dimensions.put(pos, dimension);
+    }
+
+    public void setBindMode(BlockPos pos, String mode) {
+        bindModes.put(pos, ItemWirelessLinker.BIND_POS.equals(mode)
+                ? ItemWirelessLinker.BIND_POS : ItemWirelessLinker.BIND_BLOCK);
+    }
+
+    /** 旧存档没有记录时默认按“绑定方块”处理，符合“拆除即失效”的预期 */
+    public String bindModeOf(BlockPos pos) {
+        String mode = bindModes.get(pos);
+        return ItemWirelessLinker.BIND_POS.equals(mode) ? ItemWirelessLinker.BIND_POS : ItemWirelessLinker.BIND_BLOCK;
+    }
+
+    public boolean isBlockBound(BlockPos pos) {
+        return ItemWirelessLinker.BIND_BLOCK.equals(bindModeOf(pos));
     }
 
     // ==================== NBT ====================
@@ -124,6 +164,15 @@ public class WirelessNetwork {
             dimList.appendTag(dimTag);
         }
         tag.setTag("Dimensions", dimList);
+
+        NBTTagList bindList = new NBTTagList();
+        for (Map.Entry<BlockPos, String> entry : bindModes.entrySet()) {
+            NBTTagCompound bindTag = new NBTTagCompound();
+            bindTag.setLong("Pos", entry.getKey().toLong());
+            bindTag.setString("Mode", entry.getValue());
+            bindList.appendTag(bindTag);
+        }
+        tag.setTag("BindModes", bindList);
         return tag;
     }
 
@@ -147,9 +196,21 @@ public class WirelessNetwork {
     }
 
     public static WirelessNetwork readFromNBT(NBTTagCompound tag) {
-        UUID id = new UUID(tag.getLong("IdMost"), tag.getLong("IdLeast"));
+        // UUID 缺失/损坏时给一个随机 ID，避免整张网络被丢弃
+        UUID id;
+        if (tag.hasKey("IdMost") && tag.hasKey("IdLeast")) {
+            id = new UUID(tag.getLong("IdMost"), tag.getLong("IdLeast"));
+        } else {
+            id = UUID.randomUUID();
+        }
         WirelessNetwork network = new WirelessNetwork(id);
-        network.storedEnergy = tag.getDouble("StoredEnergy");
+
+        // 存电兼容旧字段名（StoredEnergy 为当前格式；Energy/Stored 为早期格式），并修复非法值
+        double stored = 0.0D;
+        if (tag.hasKey("StoredEnergy")) stored = tag.getDouble("StoredEnergy");
+        else if (tag.hasKey("Energy")) stored = tag.getDouble("Energy");
+        else if (tag.hasKey("Stored")) stored = tag.getDouble("Stored");
+        network.storedEnergy = sanitizeEnergy(stored);
 
         NBTTagList memberList = tag.getTagList("Members", 10);
         for (int i = 0; i < memberList.tagCount(); i++) {
@@ -165,7 +226,20 @@ public class WirelessNetwork {
             NBTTagCompound dimTag = dimList.getCompoundTagAt(i);
             network.dimensions.put(BlockPos.fromLong(dimTag.getLong("Pos")), dimTag.getInteger("Dim"));
         }
+        NBTTagList bindList = tag.getTagList("BindModes", 10);
+        for (int i = 0; i < bindList.tagCount(); i++) {
+            NBTTagCompound bindTag = bindList.getCompoundTagAt(i);
+            network.bindModes.put(BlockPos.fromLong(bindTag.getLong("Pos")), bindTag.getString("Mode"));
+        }
         return network;
+    }
+
+    /** 防止 NaN / 无穷 / 负数把整张网络电表弄坏 */
+    public static double sanitizeEnergy(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value) || value < 0.0D) {
+            return 0.0D;
+        }
+        return value;
     }
 
     private static void readBindings(NBTTagList list, Map<UUID, List<BlockPos>> out) {

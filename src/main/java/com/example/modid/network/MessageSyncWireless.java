@@ -14,16 +14,19 @@ import java.util.UUID;
 
 /**
  * 服务端 -> 客户端：同步当前网络的存电与绑定列表（最多每 20 ticks 一次）。
+ * 每个条目带“绑定方式”：true = 绑定方块（拆除即失效），false = 绑定坐标。
  */
 public class MessageSyncWireless implements IMessage {
 
     public static final class PosDim {
         public final BlockPos pos;
         public final int dimension;
+        public final boolean blockBound;
 
-        public PosDim(BlockPos pos, int dimension) {
+        public PosDim(BlockPos pos, int dimension, boolean blockBound) {
             this.pos = pos;
             this.dimension = dimension;
+            this.blockBound = blockBound;
         }
     }
 
@@ -74,7 +77,8 @@ public class MessageSyncWireless implements IMessage {
         for (int i = 0; i < size; i++) {
             long pos = buf.readLong();
             int dim = buf.readInt();
-            list.add(new PosDim(BlockPos.fromLong(pos), dim));
+            boolean blockBound = buf.readBoolean();
+            list.add(new PosDim(BlockPos.fromLong(pos), dim, blockBound));
         }
         return list;
     }
@@ -84,6 +88,7 @@ public class MessageSyncWireless implements IMessage {
         for (PosDim entry : list) {
             buf.writeLong(entry.pos.toLong());
             buf.writeInt(entry.dimension);
+            buf.writeBoolean(entry.blockBound);
         }
     }
 

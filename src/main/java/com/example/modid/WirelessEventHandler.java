@@ -6,6 +6,7 @@ import com.example.modid.network.OmniNetwork;
 import com.example.modid.wireless.WirelessNetwork;
 import com.example.modid.wireless.WirelessNetworkManager;
 import gregtech.api.capability.GregtechCapabilities;
+import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IEnergyContainer;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -22,6 +23,7 @@ import net.minecraft.world.World;
 import net.minecraftforge.energy.CapabilityEnergy;
 import net.minecraftforge.energy.IEnergyStorage;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
+import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
@@ -112,8 +114,11 @@ public final class WirelessEventHandler {
         } else {
             target.add(pos);
             network.setDimensionOf(pos, world.provider.getDimension());
+            network.setBindMode(pos, ItemWirelessLinker.getBindMode(held));
             player.sendMessage(new TextComponentString("§e[无线电网] §b已绑定为§a " + label + "§b: "
-                    + pos.getX() + "," + pos.getY() + "," + pos.getZ()));
+                    + pos.getX() + "," + pos.getY() + "," + pos.getZ()
+                    + " §7(绑定方式: " + (ItemWirelessLinker.BIND_BLOCK.equals(ItemWirelessLinker.getBindMode(held))
+                    ? "方块" : "坐标") + ")"));
         }
 
         manager.markDirtyNow();
@@ -123,6 +128,34 @@ public final class WirelessEventHandler {
             serverPlayer.inventoryContainer.detectAndSendChanges();
         }
         event.setCanceled(true);
+    }
+
+    // ==================== 方块被拆除 ====================
+
+    /**
+     * 绑定方块模式：目标方块被拆除时立即解绑并同步（渲染随之消失）。
+     * 绑定坐标模式：保留坐标绑定，不做处理。
+     */
+    @SubscribeEvent
+    public static void onBlockBreak(BlockEvent.BreakEvent event) {
+        World world = event.getWorld();
+        if (world == null || world.isRemote) return;
+
+        WirelessNetworkManager manager = WirelessNetworkManager.get(world);
+        if (manager == null) return;
+
+        BlockPos pos = event.getPos();
+        boolean removed = false;
+        for (WirelessNetwork network : manager.allNetworks()) {
+            if (!network.isBlockBound(pos)) continue;
+            if (network.removePosition(pos)) removed = true;
+        }
+
+        if (removed) {
+            manager.markDirtyNow();
+            MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
+            if (server != null) syncAllLinkerHolders(server, manager);
+        }
     }
 
     // ==================== GUI 动作 ====================
@@ -153,6 +186,12 @@ public final class WirelessEventHandler {
                     + created.getNetworkId().toString().substring(0, 8)));
         } else if (action == com.example.modid.network.MessageWirelessAction.ACTION_CYCLE_NETWORK) {
             cycleNetwork(manager, player, held);
+        } else if (action == com.example.modid.network.MessageWirelessAction.ACTION_TOGGLE_BIND_MODE) {
+            String next = ItemWirelessLinker.toggleBindMode(ItemWirelessLinker.getBindMode(held));
+            ItemWirelessLinker.setBindMode(held, next);
+            player.sendMessage(new TextComponentString(ItemWirelessLinker.BIND_BLOCK.equals(next)
+                    ? "§e[无线电网] §b绑定方式: §a绑定方块 §7（目标方块被拆除后绑定自动失效）"
+                    : "§e[无线电网] §b绑定方式: §a绑定坐标 §7（方块拆除后坐标绑定仍保留）"));
         }
 
         player.inventoryContainer.detectAndSendChanges();
@@ -215,27 +254,40 @@ public final class WirelessEventHandler {
         WirelessNetworkManager manager = WirelessNetworkManager.get(overworld);
         if (manager == null) return;
 
+        boolean changed = false;
         for (WirelessNetwork network : manager.allNetworks()) {
-            settle(server, network);
+            changed |= settle(server, network);
+        }
+        if (changed) {
+            manager.markDirtyNow();
+            syncAllLinkerHolders(server, manager);
         }
 
         if (++syncTimer % SYNC_INTERVAL == 0) {
-            for (EntityPlayerMP player : server.getPlayerList().getPlayers()) {
-                if (player.getHeldItemMainhand().getItem() instanceof ItemWirelessLinker) {
-                    syncTo(player, manager);
-                }
+            syncAllLinkerHolders(server, manager);
+        }
+    }
+
+    private static void syncAllLinkerHolders(MinecraftServer server, WirelessNetworkManager manager) {
+        for (EntityPlayerMP player : server.getPlayerList().getPlayers()) {
+            if (player.getHeldItemMainhand().getItem() instanceof ItemWirelessLinker) {
+                syncTo(player, manager);
             }
         }
     }
 
-    private static void settle(MinecraftServer server, WirelessNetwork network) {
+    private static boolean settle(MinecraftServer server, WirelessNetwork network) {
+        List<BlockPos> stale = new ArrayList<>();
         // 发电：从方块抽能
         for (List<BlockPos> positions : network.getGenerators().values()) {
             for (BlockPos pos : positions) {
                 World world = server.getWorld(network.dimensionOf(pos));
                 if (world == null) continue;
                 TileEntity tile = world.getTileEntity(pos);
-                if (tile == null) continue;
+                if (tile == null) {
+                    if (world.isBlockLoaded(pos) && network.isBlockBound(pos)) stale.add(pos);
+                    continue;
+                }
 
                 IEnergyContainer gt = gtContainer(tile);
                 if (gt != null) {
@@ -276,13 +328,17 @@ public final class WirelessEventHandler {
         }
 
         // 供电：按容量与网络存电填充
+        consumerLoop:
         for (List<BlockPos> positions : network.getConsumers().values()) {
             for (BlockPos pos : positions) {
-                if (network.storedEnergy <= 0.0D) return;
+                if (network.storedEnergy <= 0.0D) break consumerLoop;
                 World world = server.getWorld(network.dimensionOf(pos));
                 if (world == null) continue;
                 TileEntity tile = world.getTileEntity(pos);
-                if (tile == null) continue;
+                if (tile == null) {
+                    if (world.isBlockLoaded(pos) && network.isBlockBound(pos)) stale.add(pos);
+                    continue;
+                }
 
                 IEnergyContainer gt = gtContainer(tile);
                 if (gt != null) {
@@ -309,6 +365,14 @@ public final class WirelessEventHandler {
                 }
             }
         }
+
+        if (!stale.isEmpty()) {
+            for (BlockPos pos : stale) {
+                network.removePosition(pos);   // 目标方块没了，绑定方块模式立即失效
+            }
+            return true;
+        }
+        return false;
     }
 
     private static void syncTo(EntityPlayerMP player, WirelessNetworkManager manager) {
@@ -325,13 +389,15 @@ public final class WirelessEventHandler {
         List<MessageSyncWireless.PosDim> generators = new ArrayList<>();
         for (List<BlockPos> positions : network.getGenerators().values()) {
             for (BlockPos pos : positions) {
-                generators.add(new MessageSyncWireless.PosDim(pos, network.dimensionOf(pos)));
+                generators.add(new MessageSyncWireless.PosDim(pos, network.dimensionOf(pos),
+                        network.isBlockBound(pos)));
             }
         }
         List<MessageSyncWireless.PosDim> consumers = new ArrayList<>();
         for (List<BlockPos> positions : network.getConsumers().values()) {
             for (BlockPos pos : positions) {
-                consumers.add(new MessageSyncWireless.PosDim(pos, network.dimensionOf(pos)));
+                consumers.add(new MessageSyncWireless.PosDim(pos, network.dimensionOf(pos),
+                        network.isBlockBound(pos)));
             }
         }
 
@@ -341,7 +407,7 @@ public final class WirelessEventHandler {
 
     // ==================== 能量容器辅助 ====================
 
-    private static final Map<Class<?>, Field> CONTAINER_FIELDS = new HashMap<>();
+    private static final Map<String, Field> CONTAINER_FIELDS = new HashMap<>();
 
     private static MetaTileEntity metaTileEntity(TileEntity tile) {
         return tile instanceof IGregTechTileEntity
@@ -358,6 +424,7 @@ public final class WirelessEventHandler {
         MetaTileEntity mte = metaTileEntity(tile);
         if (mte == null) return null;
 
+        // 1) 普通 GT 能量容器（机器 / 电池 / 创造能量单元）
         for (EnumFacing facing : EnumFacing.VALUES) {
             IEnergyContainer container = mte.getCapability(GregtechCapabilities.CAPABILITY_ENERGY_CONTAINER, facing);
             if (container != null) return container;
@@ -365,31 +432,45 @@ public final class WirelessEventHandler {
         IEnergyContainer container = mte.getCapability(GregtechCapabilities.CAPABILITY_ENERGY_CONTAINER, null);
         if (container != null) return container;
 
-        // 能源仓/多方块部件只把能量容器注册成 MultiblockAbility，不暴露 Forge capability，
-        // 这里直接反射取 MetaTileEntityEnergyHatch.energyContainer，否则会“绑定了却不输电/不取电”。
+        // 2) 激光网络容器：ILaserContainer extends IEnergyContainer，走的是 CAPABILITY_LASER
+        for (EnumFacing facing : EnumFacing.VALUES) {
+            IEnergyContainer laser = mte.getCapability(GregtechTileCapabilities.CAPABILITY_LASER, facing);
+            if (laser != null) return laser;
+        }
+        IEnergyContainer laser = mte.getCapability(GregtechTileCapabilities.CAPABILITY_LASER, null);
+        if (laser != null) return laser;
+
+        // 3) 多方块部件（能源仓 / 激光仓）只把容器注册成 MultiblockAbility，不暴露 Forge capability，
+        //    这里反射取 energyContainer（能源仓）或 buffer（激光仓）。
         return partEnergyContainer(mte);
     }
 
     private static IEnergyContainer partEnergyContainer(MetaTileEntity mte) {
-        try {
-            Field field = findContainerField(mte.getClass());
-            if (field == null) return null;
-            Object value = field.get(mte);
-            return value instanceof IEnergyContainer ? (IEnergyContainer) value : null;
-        } catch (Throwable ignored) {
-            return null;
+        for (String name : new String[]{"energyContainer", "buffer"}) {
+            try {
+                Field field = findContainerField(mte.getClass(), name);
+                if (field == null) continue;
+                Object value = field.get(mte);
+                if (value instanceof IEnergyContainer) {
+                    return (IEnergyContainer) value;
+                }
+            } catch (Throwable ignored) {
+                // 尝试下一个字段
+            }
         }
+        return null;
     }
 
-    private static Field findContainerField(Class<?> type) {
-        Field cached = CONTAINER_FIELDS.get(type);
+    private static Field findContainerField(Class<?> type, String name) {
+        String cacheKey = type.getName() + "#" + name;
+        Field cached = CONTAINER_FIELDS.get(cacheKey);
         if (cached != null) return cached;
         for (Class<?> current = type; current != null && current != Object.class; current = current.getSuperclass()) {
             try {
-                Field field = current.getDeclaredField("energyContainer");
+                Field field = current.getDeclaredField(name);
                 if (!IEnergyContainer.class.isAssignableFrom(field.getType())) continue;
                 field.setAccessible(true);
-                CONTAINER_FIELDS.put(type, field);
+                CONTAINER_FIELDS.put(cacheKey, field);
                 return field;
             } catch (NoSuchFieldException ignored) {
                 // 继续向父类找

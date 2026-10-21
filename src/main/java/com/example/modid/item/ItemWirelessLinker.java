@@ -16,9 +16,15 @@ public class ItemWirelessLinker extends Item {
 
     public static final String NBT_NETWORK = "networkId";
     public static final String NBT_MODE = "mode";
+    public static final String NBT_BIND_MODE = "bindMode";
 
     public static final String MODE_GENERATE = "generate";
     public static final String MODE_CONSUME = "consume";
+
+    /** 绑定方块：方块被拆除后绑定自动失效 */
+    public static final String BIND_BLOCK = "block";
+    /** 绑定坐标：方块拆除后仍保留坐标绑定 */
+    public static final String BIND_POS = "pos";
 
     public ItemWirelessLinker() {
         setRegistryName("omnitool", "wireless_linker");
@@ -67,5 +73,27 @@ public class ItemWirelessLinker extends Item {
             stack.setTagCompound(tag);
         }
         tag.setString(NBT_MODE, MODE_CONSUME.equals(mode) ? MODE_CONSUME : MODE_GENERATE);
+    }
+
+    // ==================== 绑定方式（方块 / 坐标） ====================
+
+    public static String getBindMode(ItemStack stack) {
+        if (stack.isEmpty() || !stack.hasTagCompound()) return BIND_BLOCK;
+        String mode = stack.getTagCompound().getString(NBT_BIND_MODE);
+        return BIND_POS.equals(mode) ? BIND_POS : BIND_BLOCK;
+    }
+
+    public static void setBindMode(ItemStack stack, String mode) {
+        if (stack.isEmpty()) return;
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) {
+            tag = new NBTTagCompound();
+            stack.setTagCompound(tag);
+        }
+        tag.setString(NBT_BIND_MODE, BIND_POS.equals(mode) ? BIND_POS : BIND_BLOCK);
+    }
+
+    public static String toggleBindMode(String mode) {
+        return BIND_POS.equals(mode) ? BIND_BLOCK : BIND_POS;
     }
 }
