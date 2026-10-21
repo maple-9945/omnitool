@@ -28,12 +28,19 @@
 
    所以本地重命名为 `gregtech-1.12.2-master-2901.jar`，`gradle/scripts/dependencies.gradle` 引用的是重命名后的名字。
 
+3. **上游会就地替换 gtlitecore 的同名 jar。**
+   2026-10 的更新把 `mods/gtlitecore-1.0.0.jar` 从 14,953,638 字节换成了 15,132,751 字节
+   （SHA 从 `d79e244e…` 变成 `a41618aa…`），文件名不变。
+   CI 里曾对它做硬编码 `sha256sum -c`，于是上游一更新就红。
+   现在 `build.yml` 只对 **GTCEu** 做严格哈希校验，`gtlitecore` / `morphismlib` 改为
+   “zip 完整性校验 + 哈希变化 warning”；上游再更新时同步改本文件的哈希即可，CI 不会直接失败。
+
 ## 文件清单
 
 | 文件名 | 版本 | 来源（相对 `mods/`） | 大小（字节） | SHA-256 |
 |---|---|---|---|---|
 | `gregtech-1.12.2-master-2901.jar` | GTCEu master 构建 #2901（`mcmod.info` 版本号 `2.8.7-beta`） | `mods/gregtech-1.12.2-master-%232901.jar`（URL 中 `#` 编码为 `%23`） | 14,054,011 | `b9fea8ac4599f04348c12611e515d43dc15819a9b11df9bfbc1495e7e123b317` |
-| `gtlitecore-1.0.0.jar` | GregTech Lite Core 1.0.0（CurseForge 未发布） | `mods/gtlitecore-1.0.0.jar` | 14,953,638 | `d79e244e8b8d2769637e5fa2908bcb3c944b04846dc8496a9dc75fbda1d6cef6` |
+| `gtlitecore-1.0.0.jar` | GregTech Lite Core 1.0.0（CurseForge 未发布；上游 2026-10 就地更新过内容） | `mods/gtlitecore-1.0.0.jar` | 15,132,751 | `a41618aa2397c1a268e59a619b58faba610ff0e0d485f289a2ffeb763c604337` |
 | `morphismlib-1.12.2-1.0.0.jar` | Morphism Lib 1.0.0（GTLite Core 的渲染依赖） | `mods/morphismlib-1.12.2-1.0.0.jar` | 139,150 | `39e6271853929d13a73e62dea72bb13392bf3c35734b37d518fc5d98bba3b233` |
 
 下载基址：`https://raw.githubusercontent.com/GregTechLite/GregTech-Lite-Modpack/main/mods/`
