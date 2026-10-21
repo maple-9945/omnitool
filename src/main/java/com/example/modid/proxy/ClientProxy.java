@@ -3,12 +3,14 @@ package com.example.modid.proxy;
 import com.example.modid.ModItems;
 import com.example.modid.client.ClientAccelRenderer;
 import com.example.modid.client.gui.GuiOmniTool;
+import com.example.modid.client.gui.GuiWirelessLinker;
 import com.example.modid.network.MessageAccelCancel;
 import com.example.modid.network.MessageTimeAccel;
 import com.example.modid.network.OmniNetwork;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.ModelResourceLocation;
 import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraftforge.client.event.ModelRegistryEvent;
@@ -37,6 +39,10 @@ public class ClientProxy {
         ModelLoader.setCustomModelResourceLocation(
                 ModItems.OMNI_TOOL, 0,
                 new ModelResourceLocation("omnitool:omni_tool", "inventory")
+        );
+        ModelLoader.setCustomModelResourceLocation(
+                ModItems.WIRELESS_LINKER, 0,
+                new ModelResourceLocation("omnitool:wireless_linker", "inventory")
         );
 
         if (keyOpenGui == null) {
@@ -67,14 +73,21 @@ public class ClientProxy {
         boolean accel = isDown(keyTimeAccel);
         boolean cancel = isDown(keyAccelCancel);
 
-        boolean usable = mc.player != null && mc.currentScreen == null
-                && mc.player.getHeldItemMainhand().getItem() == ModItems.OMNI_TOOL;
+        ItemStack held = mc.player == null ? ItemStack.EMPTY : mc.player.getHeldItemMainhand();
+        boolean guiClosed = mc.player != null && mc.currentScreen == null;
+        boolean holdingOmni = held.getItem() == ModItems.OMNI_TOOL;
+        boolean holdingLinker = held.getItem() == ModItems.WIRELESS_LINKER;
 
-        if (usable) {
-            if (open && !lastOpen) {
+        // G：按主手物品打开对应 GUI（OmniTool 或 无线电网链接工具）
+        if (guiClosed && open && !lastOpen) {
+            if (holdingOmni) {
                 mc.displayGuiScreen(new GuiOmniTool());
+            } else if (holdingLinker) {
+                mc.displayGuiScreen(new GuiWirelessLinker());
             }
+        }
 
+        if (guiClosed && holdingOmni) {
             BlockPos target = lookedBlock(mc);
 
             if (accel && !lastAccel) {

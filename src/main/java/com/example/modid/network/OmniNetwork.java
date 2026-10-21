@@ -23,5 +23,7 @@ public final class OmniNetwork {
         INSTANCE.registerMessage(MessageAccelSync.Handler.class, MessageAccelSync.class, 2, Side.CLIENT);
         INSTANCE.registerMessage(MessageAccelCancel.Handler.class, MessageAccelCancel.class, 3, Side.SERVER);
         INSTANCE.registerMessage(MessageAccelOptions.Handler.class, MessageAccelOptions.class, 4, Side.SERVER);
+        INSTANCE.registerMessage(MessageWirelessAction.Handler.class, MessageWirelessAction.class, 5, Side.SERVER);
+        INSTANCE.registerMessage(MessageSyncWireless.Handler.class, MessageSyncWireless.class, 6, Side.CLIENT);
     }
 }
