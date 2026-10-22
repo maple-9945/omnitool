@@ -207,7 +207,7 @@ public final class TimeAccelHandler {
         Iterator<Map.Entry<Long, Accel>> it = ACTIVE.entrySet().iterator();
         while (it.hasNext()) {
             Accel accel = it.next().getValue();
-            if (!owner.equals(accel.owner)) continue;
+            if (!sameTeam(owner, accel.owner)) continue;
             if (pos == null || accel.pos.equals(pos)) {
                 restoreEnergy(accel);
                 it.remove();
@@ -266,12 +266,19 @@ public final class TimeAccelHandler {
         Accel accel = ACTIVE.get(key);
 
         if (accel != null) {
-            accel.ticks = WINDOW_TICKS;
-            accel.multiplier = multiplier;
-            accel.permanent = permanent;
-            player.sendMessage(new TextComponentString(permanent
-                    ? "§e[全能工具] §b已设为永久加速 §7(" + multiplier + "x)"
-                    : "§e[全能工具] §b已刷新加速 §7(" + multiplier + "x, 30 秒)"));
+            // 再次选中同一个目标 = 取消加速（效果 + 渲染一起消失）
+            if (!sameTeam(accel.owner, player.getUniqueID())) {
+                player.sendMessage(new TextComponentString(
+                        "§e[全能工具] §7该方块正被其他团队加速，无法重复标记。"));
+                return;
+            }
+
+            restoreEnergy(accel);
+            ACTIVE.remove(key);
+            player.sendMessage(new TextComponentString(
+                    "§e[全能工具] §b已取消该方块的加速。"));
+            MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
+            if (server != null) syncToOwners(server);
             return;
         }
 
@@ -380,6 +387,15 @@ public final class TimeAccelHandler {
         }
         SYNCED.clear();
         SYNCED.addAll(syncedNow);
+    }
+
+    /** 同一 FTB 团队（或同一玩家）视为可共享/可取消 */
+    private static boolean sameTeam(UUID a, UUID b) {
+        if (a == null || b == null) return false;
+        if (a.equals(b)) return true;
+        UUID keyA = WirelessTeams.keyOf(a);
+        UUID keyB = WirelessTeams.keyOf(b);
+        return keyA != null && keyA.equals(keyB);
     }
 
     // ==================== GT 反射辅助 ====================
