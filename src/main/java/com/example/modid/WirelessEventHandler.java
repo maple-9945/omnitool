@@ -182,8 +182,9 @@ public final class WirelessEventHandler {
         } else if (action == com.example.modid.network.MessageWirelessAction.ACTION_CREATE_NETWORK) {
             WirelessNetwork created = manager.createNetwork(player);
             ItemWirelessLinker.setNetworkId(held, created.getNetworkId());
-            player.sendMessage(new TextComponentString("§e[无线电网] §b已创建新网络并切换到 §a"
-                    + created.getNetworkId().toString().substring(0, 8)));
+            player.sendMessage(new TextComponentString("§e[无线电网] §b已切换到网络 §a"
+                    + created.getNetworkId().toString().substring(0, 8)
+                    + "§7（团队共享时全队使用同一张电网）"));
         } else if (action == com.example.modid.network.MessageWirelessAction.ACTION_CYCLE_NETWORK) {
             cycleNetwork(manager, player, held);
         } else if (action == com.example.modid.network.MessageWirelessAction.ACTION_TOGGLE_BIND_MODE) {
@@ -232,11 +233,22 @@ public final class WirelessEventHandler {
     }
 
     private static WirelessNetwork resolveNetwork(WirelessNetworkManager manager, EntityPlayer player, ItemStack held) {
+        // 1) 物品 NBT 上已经有网络，且自己/自己的团队是成员 → 直接用
         WirelessNetwork network = manager.getNetwork(ItemWirelessLinker.getNetworkId(held));
-        if (network == null || !network.getMembers().contains(player.getUniqueID())) {
-            network = manager.createNetwork(player);
-            ItemWirelessLinker.setNetworkId(held, network.getNetworkId());
+        if (network != null && manager.isMember(network, player)) {
+            return network;
         }
+
+        // 2) 同 FTB 团队：加入团队网络，并把玩家原来的个人电网（存电 + 绑定）合并进来
+        network = manager.ensureTeamNetwork(player);
+        if (network != null) {
+            ItemWirelessLinker.setNetworkId(held, network.getNetworkId());
+            return network;
+        }
+
+        // 3) 都没有 → 新建（成员里写入团队 key）
+        network = manager.createNetwork(player);
+        ItemWirelessLinker.setNetworkId(held, network.getNetworkId());
         return network;
     }
 
@@ -378,8 +390,20 @@ public final class WirelessEventHandler {
     private static void syncTo(EntityPlayerMP player, WirelessNetworkManager manager) {
         if (player == null || manager == null) return;
 
-        UUID id = ItemWirelessLinker.getNetworkId(player.getHeldItemMainhand());
+        ItemStack held = player.getHeldItemMainhand();
+        UUID id = ItemWirelessLinker.getNetworkId(held);
         WirelessNetwork network = manager.getNetwork(id);
+
+        // 物品还没指定网络（或网络不属于自己/团队）：自动加入 FTB 团队网络（并把个人电网电量并入）
+        if (network == null || !manager.isMember(network, player)) {
+            WirelessNetwork teamNetwork = manager.ensureTeamNetwork(player);
+            if (teamNetwork != null) {
+                network = teamNetwork;
+                ItemWirelessLinker.setNetworkId(held, network.getNetworkId());
+                player.inventoryContainer.detectAndSendChanges();
+            }
+        }
+
         if (network == null) {
             OmniNetwork.INSTANCE.sendTo(new MessageSyncWireless(false, null, 0.0D,
                     new ArrayList<>(), new ArrayList<>()), player);

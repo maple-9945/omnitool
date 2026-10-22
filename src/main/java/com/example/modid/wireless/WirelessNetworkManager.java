@@ -56,22 +56,106 @@ public class WirelessNetworkManager extends WorldSavedData {
     }
 
     public WirelessNetwork createNetwork(EntityPlayer player) {
+        UUID teamKey = WirelessTeams.keyOf(player);
+        UUID playerId = player.getUniqueID();
+
+        // 团队只允许一张共享电网：已经存在就直接复用，避免“一队多网”
+        if (teamKey != null && !teamKey.equals(playerId)) {
+            for (WirelessNetwork existing : networks.values()) {
+                if (existing.getMembers().contains(teamKey)) return existing;
+            }
+        }
+
         WirelessNetwork network = new WirelessNetwork(UUID.randomUUID());
-        network.getMembers().add(player.getUniqueID());
+        // 有团队时只记团队 key（退队后自然失去访问）；没有团队才记个人 UUID
+        network.getMembers().add(teamKey != null ? teamKey : playerId);
         networks.put(network.getNetworkId(), network);
         markDirty();
         return network;
     }
 
+    /**
+     * 加入团队时的电网合并：
+     *  - 团队已有网络：把玩家此前的个人网络（存电 + 绑定）并入团队网络，然后删除个人网络；
+     *  - 团队还没有网络：用玩家的个人网络合出一个团队网络；
+     *  - 玩家不在任何团队：返回 null（保持个人电网，不做合并）。
+     */
+    public WirelessNetwork ensureTeamNetwork(EntityPlayer player) {
+        if (player == null) return null;
+        UUID teamKey = WirelessTeams.keyOf(player);
+        UUID playerId = player.getUniqueID();
+        boolean inTeam = teamKey != null && !teamKey.equals(playerId);
+        if (!inTeam) return null;
+
+        WirelessNetwork teamNetwork = null;
+        for (WirelessNetwork network : networks.values()) {
+            if (network.getMembers().contains(teamKey)) {
+                teamNetwork = network;
+                break;
+            }
+        }
+
+        List<WirelessNetwork> personal = new ArrayList<>();
+        for (WirelessNetwork network : networks.values()) {
+            if (network == teamNetwork) continue;
+            if (network.getMembers().contains(playerId)) {
+                personal.add(network);
+            }
+        }
+
+        if (teamNetwork == null && personal.isEmpty()) return null;
+
+        if (teamNetwork == null) {
+            teamNetwork = new WirelessNetwork(UUID.randomUUID());
+            teamNetwork.getMembers().add(teamKey);
+            networks.put(teamNetwork.getNetworkId(), teamNetwork);
+        }
+
+        for (WirelessNetwork old : personal) {
+            old.mergeInto(teamNetwork);          // 存电 + 绑定并入团队电网
+            networks.remove(old.getNetworkId()); // 合并后删除个人网络，避免电量重复计算
+        }
+
+        markDirty();
+        return teamNetwork;
+    }
+
+    /** 玩家是否属于该网络：团队 key 或（旧存档的）个人 UUID */
+    public boolean isMember(WirelessNetwork network, EntityPlayer player) {
+        if (network == null || player == null) return false;
+        UUID teamKey = WirelessTeams.keyOf(player);
+        UUID playerId = player.getUniqueID();
+        if (network.getMembers().contains(teamKey)) return true;
+        if (network.getMembers().contains(playerId)) {
+            // 旧存档：把个人 UUID 升级成团队 key（退队后即失去访问，符合“退队归 0”的语义）
+            if (!teamKey.equals(playerId)) {
+                network.getMembers().remove(playerId);
+                network.getMembers().add(teamKey);
+                markDirty();
+            }
+            return true;
+        }
+        return false;
+    }
+
     public List<WirelessNetwork> getNetworksForPlayer(EntityPlayer player) {
         List<WirelessNetwork> result = new ArrayList<>();
-        UUID uuid = player.getUniqueID();
         for (WirelessNetwork network : networks.values()) {
-            if (network.getMembers().contains(uuid)) {
+            if (isMember(network, player)) {
                 result.add(network);
             }
         }
         return result;
+    }
+
+    /** 找玩家所在团队的共享网络；没有则返回 null */
+    public WirelessNetwork findTeamNetwork(EntityPlayer player) {
+        UUID teamKey = WirelessTeams.keyOf(player);
+        if (teamKey == null || teamKey.equals(player.getUniqueID())) return null;
+        for (WirelessNetwork network : networks.values()) {
+            if (network.getMembers().contains(teamKey)) return network;
+        }
+        return null;
     }
 
     public void deleteNetwork(UUID id) {

@@ -90,6 +90,41 @@ public class WirelessNetwork {
         consumers.remove(player);
     }
 
+    /**
+     * 把本网络的存电与绑定并入目标网络（团队电网），并入后本网络被清空。
+     * 用于玩家加入 FTB 团队时，把原来的个人电网电量合并进团队电网。
+     */
+    public void mergeInto(WirelessNetwork target) {
+        if (target == null || target == this) return;
+
+        target.storedEnergy = sanitizeEnergy(target.storedEnergy + this.storedEnergy);
+
+        for (Map.Entry<UUID, List<BlockPos>> entry : generators.entrySet()) {
+            List<BlockPos> destination = target.generatorList(entry.getKey());
+            for (BlockPos pos : entry.getValue()) {
+                if (!destination.contains(pos)) destination.add(pos);
+            }
+        }
+        for (Map.Entry<UUID, List<BlockPos>> entry : consumers.entrySet()) {
+            List<BlockPos> destination = target.consumerList(entry.getKey());
+            for (BlockPos pos : entry.getValue()) {
+                if (!destination.contains(pos)) destination.add(pos);
+            }
+        }
+        for (Map.Entry<BlockPos, Integer> entry : dimensions.entrySet()) {
+            target.setDimensionOf(entry.getKey(), entry.getValue());
+        }
+        for (Map.Entry<BlockPos, String> entry : bindModes.entrySet()) {
+            target.setBindMode(entry.getKey(), entry.getValue());
+        }
+
+        generators.clear();
+        consumers.clear();
+        dimensions.clear();
+        bindModes.clear();
+        storedEnergy = 0.0D;
+    }
+
     /** 方块被拆除/消失时：从所有玩家的发电与供电列表里移除该坐标，返回是否真的移除了东西 */
     public boolean removePosition(BlockPos pos) {
         boolean removed = removeFromMap(generators, pos);

@@ -3,6 +3,7 @@ package com.example.modid;
 import com.example.modid.item.ItemOmniTool;
 import com.example.modid.network.MessageAccelSync;
 import com.example.modid.network.OmniNetwork;
+import com.example.modid.wireless.WirelessTeams;
 import gregtech.api.capability.GregtechCapabilities;
 import gregtech.api.capability.IEnergyContainer;
 import gregtech.api.capability.IMultipleTankHandler;
@@ -358,32 +359,27 @@ public final class TimeAccelHandler {
     }
 
     private static void syncToOwners(MinecraftServer server) {
-        Map<UUID, List<MessageAccelSync.Entry>> byOwner = new HashMap<>();
+        // 按 FTB 团队分组：同一团队的玩家共享同一张加速列表与渲染
+        Map<UUID, List<MessageAccelSync.Entry>> byTeam = new HashMap<>();
         for (Accel accel : ACTIVE.values()) {
-            byOwner.computeIfAbsent(accel.owner, k -> new ArrayList<>())
+            UUID teamKey = WirelessTeams.keyOf(accel.owner);
+            byTeam.computeIfAbsent(teamKey, k -> new ArrayList<>())
                     .add(new MessageAccelSync.Entry(accel.dimension, accel.pos, accel.ticks, accel.permanent));
         }
 
-        // 之前同步过、但现在一个加速方块都没有的玩家：补发空列表，否则客户端边框永远清不掉
-        List<UUID> stale = new ArrayList<>();
-        for (UUID owner : SYNCED) {
-            if (!byOwner.containsKey(owner)) stale.add(owner);
-        }
-        for (UUID owner : stale) {
-            EntityPlayerMP player = server.getPlayerList().getPlayerByUUID(owner);
-            if (player != null) {
+        Set<UUID> syncedNow = new HashSet<>();
+        for (EntityPlayerMP player : server.getPlayerList().getPlayers()) {
+            List<MessageAccelSync.Entry> entries = byTeam.get(WirelessTeams.keyOf(player));
+            if (entries != null) {
+                OmniNetwork.INSTANCE.sendTo(new MessageAccelSync(entries), player);
+                syncedNow.add(player.getUniqueID());
+            } else if (SYNCED.contains(player.getUniqueID())) {
+                // 之前同步过、现在团队里没有加速方块：补发空列表清掉渲染
                 OmniNetwork.INSTANCE.sendTo(new MessageAccelSync(new ArrayList<>()), player);
             }
-            SYNCED.remove(owner);
         }
-
-        for (Map.Entry<UUID, List<MessageAccelSync.Entry>> entry : byOwner.entrySet()) {
-            EntityPlayerMP player = server.getPlayerList().getPlayerByUUID(entry.getKey());
-            if (player != null) {
-                OmniNetwork.INSTANCE.sendTo(new MessageAccelSync(entry.getValue()), player);
-                SYNCED.add(entry.getKey());
-            }
-        }
+        SYNCED.clear();
+        SYNCED.addAll(syncedNow);
     }
 
     // ==================== GT 反射辅助 ====================
