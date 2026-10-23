@@ -15,6 +15,8 @@ import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.metatileentity.multiblock.RecipeMapSteamMultiblockController;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagList;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
@@ -23,6 +25,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraft.world.World;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
+import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
@@ -79,7 +82,55 @@ public final class TimeAccelHandler {
     /** 已经同步过渲染数据的玩家，用于在他们没有加速方块时补发空列表（否则客户端边框清不掉） */
     private static final Set<UUID> SYNCED = new HashSet<>();
 
+    private static int saveTimer = 0;
+
     private TimeAccelHandler() {
+    }
+
+    // ==================== 存档持久化 ====================
+
+    @SubscribeEvent
+    public static void onWorldLoad(WorldEvent.Load event) {
+        World world = event.getWorld();
+        if (world == null || world.isRemote) return;
+        if (world.provider.getDimension() != 0) return;
+        AccelSavedData.get(world);   // 触发读取：loadState() 会恢复 ACTIVE
+    }
+
+    static void saveState(NBTTagCompound nbt) {
+        NBTTagList list = new NBTTagList();
+        for (Accel accel : ACTIVE.values()) {
+            if (accel == null || accel.owner == null || accel.pos == null) continue;
+            NBTTagCompound tag = new NBTTagCompound();
+            tag.setLong("OwnerMost", accel.owner.getMostSignificantBits());
+            tag.setLong("OwnerLeast", accel.owner.getLeastSignificantBits());
+            tag.setInteger("Dim", accel.dimension);
+            tag.setLong("Pos", accel.pos.toLong());
+            tag.setInteger("Ticks", accel.ticks);
+            tag.setInteger("Multiplier", accel.multiplier);
+            tag.setBoolean("Permanent", accel.permanent);
+            list.appendTag(tag);
+        }
+        nbt.setTag("Accel", list);
+    }
+
+    static void loadState(NBTTagCompound nbt) {
+        ACTIVE.clear();
+        NBTTagList list = nbt.getTagList("Accel", 10);
+        for (int i = 0; i < list.tagCount(); i++) {
+            NBTTagCompound tag = list.getCompoundTagAt(i);
+            Accel accel = new Accel();
+            accel.owner = new UUID(tag.getLong("OwnerMost"), tag.getLong("OwnerLeast"));
+            accel.dimension = tag.getInteger("Dim");
+            accel.pos = BlockPos.fromLong(tag.getLong("Pos"));
+            accel.ticks = Math.max(1, tag.getInteger("Ticks"));
+            accel.multiplier = clampMultiplier(tag.getInteger("Multiplier"));
+            accel.permanent = tag.getBoolean("Permanent");
+            ACTIVE.put(posKey(accel.dimension, accel.pos), accel);
+        }
+        if (OmniConfig.debug) {
+            ExampleMod.LOGGER.info("[Omni Tool] 已从存档恢复 {} 个加速方块", ACTIVE.size());
+        }
     }
 
     private static Method findMethod(Class<?> owner, String name) {
@@ -188,6 +239,7 @@ public final class TimeAccelHandler {
             restoreEnergy(accel);
         }
         ACTIVE.clear();
+        AccelSavedData.markDirtyIfPresent();
 
         MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
         if (server != null) {
@@ -219,6 +271,7 @@ public final class TimeAccelHandler {
             player.sendMessage(new TextComponentString("§e[全能工具] §7没有可取消的加速方块。"));
             return;
         }
+        AccelSavedData.markDirtyIfPresent();
 
         player.sendMessage(new TextComponentString(pos == null
                 ? "§e[全能工具] §b已取消全部加速。"
@@ -275,6 +328,7 @@ public final class TimeAccelHandler {
 
             restoreEnergy(accel);
             ACTIVE.remove(key);
+            AccelSavedData.markDirtyIfPresent();
             player.sendMessage(new TextComponentString(
                     "§e[全能工具] §b已取消该方块的加速。"));
             MinecraftServer server = FMLCommonHandler.instance().getMinecraftServerInstance();
@@ -291,6 +345,7 @@ public final class TimeAccelHandler {
         accel.permanent = permanent;
         attachEnergy(world, pos, accel);
         ACTIVE.put(key, accel);
+        AccelSavedData.markDirtyIfPresent();
 
         player.sendMessage(new TextComponentString(permanent
                 ? "§e[全能工具] §b开始永久加速 §7" + pos.getX() + "," + pos.getY() + "," + pos.getZ()
@@ -332,7 +387,13 @@ public final class TimeAccelHandler {
             if (!(tile instanceof ITickable) || expired) {
                 restoreEnergy(accel);
                 it.remove();
+                AccelSavedData.markDirtyIfPresent();
                 continue;
+            }
+
+            // 从存档恢复的记录没有能量容器引用，这里补挂（以当前电量为基线）
+            if (accel.energy == null) {
+                attachEnergy(world, accel.pos, accel);
             }
 
             ITickable tickable = (ITickable) tile;
@@ -362,6 +423,11 @@ public final class TimeAccelHandler {
         // 每 10 ticks 把“正在加速的方块”同步给客户端用于渲染
         if (++syncTimer % 10 == 0) {
             syncToOwners(server);
+        }
+
+        // 定期把剩余时间写盘（实际落盘由世界保存触发，这里只标脏）
+        if (++saveTimer % 20 == 0 && !ACTIVE.isEmpty()) {
+            AccelSavedData.markDirtyIfPresent();
         }
     }
 
@@ -555,6 +621,10 @@ public final class TimeAccelHandler {
     }
 
     private static long posKey(World world, BlockPos pos) {
-        return ((long) world.provider.getDimension() << 56) ^ pos.toLong();
+        return posKey(world.provider.getDimension(), pos);
+    }
+
+    private static long posKey(int dimension, BlockPos pos) {
+        return ((long) dimension << 56) ^ pos.toLong();
     }
 }

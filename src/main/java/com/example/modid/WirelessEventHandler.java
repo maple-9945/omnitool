@@ -268,7 +268,7 @@ public final class WirelessEventHandler {
 
         boolean changed = false;
         for (WirelessNetwork network : manager.allNetworks()) {
-            changed |= settle(server, network);
+            changed |= settle(server, network, manager);
         }
         if (changed) {
             manager.markDirtyNow();
@@ -288,7 +288,8 @@ public final class WirelessEventHandler {
         }
     }
 
-    private static boolean settle(MinecraftServer server, WirelessNetwork network) {
+    private static boolean settle(MinecraftServer server, WirelessNetwork network, WirelessNetworkManager manager) {
+        double startEnergy = network.storedEnergy;
         List<BlockPos> stale = new ArrayList<>();
         // 发电：从方块抽能
         for (List<BlockPos> positions : network.getGenerators().values()) {
@@ -383,6 +384,12 @@ public final class WirelessEventHandler {
                 network.removePosition(pos);   // 目标方块没了，绑定方块模式立即失效
             }
             return true;
+        }
+
+        // 存电每 tick 都可能变化：标脏让世界保存时把最新电量写盘，
+        // 否则退出世界后电网存电会回到上次“有结构变化”时保存的旧值。
+        if (network.storedEnergy != startEnergy) {
+            manager.markDirtyNow();
         }
         return false;
     }
