@@ -9,6 +9,7 @@ import gregtech.api.capability.IEnergyContainer;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.impl.AbstractRecipeLogic;
 import gregtech.api.metatileentity.MetaTileEntity;
+import gregtech.api.metatileentity.SteamMetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
@@ -26,7 +27,10 @@ import net.minecraft.util.text.TextComponentString;
 import net.minecraft.world.World;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.world.WorldEvent;
+import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
+import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.fluids.FluidTank;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -75,6 +79,8 @@ public final class TimeAccelHandler {
     private static final Field FIELD_LAST_TICK = findField(MetaTileEntity.class, "lastTick");
     private static final Field FIELD_CAN_PROGRESS = findField(AbstractRecipeLogic.class, "canRecipeProgress");
     private static final Field FIELD_HAS_NOT_ENOUGH_ENERGY = findField(AbstractRecipeLogic.class, "hasNotEnoughEnergy");
+    /** 单方块蒸汽机器的蒸汽罐（protected FluidTank steamFluidTank） */
+    private static final Field FIELD_STEAM_TANK = findField(SteamMetaTileEntity.class, "steamFluidTank");
 
     /** AbstractRecipeLogic#updateRecipeProgress()：protected，直接驱动进度，绕过 update() 里的 canRecipeProgress 重算 */
     private static final Method METHOD_UPDATE_PROGRESS = findMethod(AbstractRecipeLogic.class, "updateRecipeProgress");
@@ -455,6 +461,29 @@ public final class TimeAccelHandler {
         SYNCED.addAll(syncedNow);
     }
 
+    /** 单方块蒸汽机器的蒸汽罐；不是蒸汽机器返回 null */
+    private static FluidTank steamTankOf(MetaTileEntity mte) {
+        if (!(mte instanceof SteamMetaTileEntity) || FIELD_STEAM_TANK == null) return null;
+        try {
+            Object value = FIELD_STEAM_TANK.get(mte);
+            return value instanceof FluidTank ? (FluidTank) value : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 把这次 tick 消耗的蒸汽补回去，避免加速把蒸汽当耗材成倍烧掉 */
+    private static void refillSteam(FluidTank tank, int before) {
+        if (tank == null || before <= 0) return;
+        int now = tank.getFluidAmount();
+        if (now >= before) return;
+        FluidStack fluid = tank.getFluid();
+        Fluid steam = fluid != null ? fluid.getFluid() : FluidRegistry.getFluid("steam");
+        if (steam != null) {
+            tank.fill(new FluidStack(steam, before - now), true);
+        }
+    }
+
     /** 同一 FTB 团队（或同一玩家）视为可共享/可取消 */
     private static boolean sameTeam(UUID a, UUID b) {
         if (a == null || b == null) return false;
@@ -541,7 +570,14 @@ public final class TimeAccelHandler {
             }
         }
 
+        // 单方块蒸汽机器：蒸汽是它的“能源”，加速时同样要记录并补回，
+        // 否则 1024 倍 tick 会把蒸汽罐抽空（表现就是“蒸汽消耗也被加速”）。
+        FluidTank steamTank = steamTankOf(mte);
+        int steamBefore = steamTank == null ? 0 : steamTank.getFluidAmount();
+
         tickable.update();
+
+        refillSteam(steamTank, steamBefore);
 
         if (container != null) {
             long now = container.getEnergyStored();
